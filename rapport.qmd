@@ -2,8 +2,8 @@
 title: "Rapport de laboratoire 3"
 subtitle: "MTH8211"
 author:
-  - name: Votre nom
-    email: votre.adresse@polymtl.ca
+  - name: Mon nom
+    email: mon.adresse@polymtl.ca
     affiliation:
       - name: Polytechnique Montréal
 format:
