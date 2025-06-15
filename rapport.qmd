@@ -1,0 +1,68 @@
+---
+title: "Rapport de laboratoire 3"
+subtitle: "MTH8211"
+author:
+  - name: Votre nom
+    email: votre.adresse@polymtl.ca
+    affiliation:
+      - name: Polytechnique Montréal
+format:
+  pdf:
+    keep-tex: false
+    documentclass: article
+    include-in-header:
+      - text: |
+            \usepackage{xspace}
+            \usepackage[francais]{babel}
+    geometry:
+      - margin=1in
+    papersize: letter
+    colorlinks: true
+    urlcolor: blue
+engine: julia
+---
+
+```{julia}
+#| output: false
+using Pkg
+Pkg.activate("labo3_env")
+using LinearAlgebra
+```
+
+# Contexte
+
+Dans ce laboratoire, on demande d'implémenter une version aussi efficace que possible de la factorisation QR compacte de Householder.
+On se réfèrera au carnet Jupyter pour l'implémentation de base.
+Ce rapport doit contenir des comparaisons entre l'implémentation de base, votre implémentation efficace, et la factorisation QR de la librairie LAPACK.
+
+## Exercices
+
+1. Ajouter `BenchmarkTools` à l'environnement de ce laboratoire ;
+
+```{julia}
+#| output: false
+```
+
+2. mesurer le temps d'exécution et les allocations des fonctions `myqr_simple!()` et `Qprod_simple!()` sur un exemple de taille $500 \times 100$ et les comparer à un appel direct à la factorisation QR de LAPACK ;
+
+```{julia}
+# ...
+```
+
+3. éliminer autant que possible les allocations (il est possible d'obtenir zéro allocations) ;
+
+```{julia}
+# ...
+```
+
+4. implémenter le produit avec $Q^*$ sans allocations et valider qu'il est correct ;
+
+```{julia}
+# ...
+```
+
+5. valider que la factorisation et les produits avec $Q$ et $Q^*$ fonctionnent correctement quand $A$ est complexe et quand $A$ contient des entrées de type `BigFloat`.
+
+```{julia}
+# ...
+```

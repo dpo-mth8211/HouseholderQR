@@ -1,0 +1,38 @@
+name: Quarto
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  quarto:
+    name: Quarto
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: "1"
+      - name: Install Jupyter
+        run: python3 -m pip install jupyter
+      - name: Setup Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tinytex: true
+      - run: quarto --version
+      - name: Render Quarto Project
+        uses: quarto-dev/quarto-actions/render@v2
+        with:
+          to: pdf
+          path: rapport.qmd
+      - name: Upload PDF
+        uses: actions/upload-artifact@v4
+        with:
+          name: Success--Here-is-the-PDF
+          path: rapport.pdf
