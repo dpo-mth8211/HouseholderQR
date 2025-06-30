@@ -2,8 +2,8 @@
 title: "Rapport de laboratoire 3"
 subtitle: "MTH8211"
 author:
-  - name: Votre nom
-    email: votre.adresse@polymtl.ca
+  - name: Hortense Beaudoin
+    email: hortense.beaudoin@polymtl.ca
     affiliation:
       - name: Polytechnique Montréal
 format:
@@ -41,28 +41,111 @@ Ce rapport doit contenir des comparaisons entre l'implémentation de base, votre
 
 ```{julia}
 #| output: false
+Pkg.add("BenchmarkTools")
+using BenchmarkTools
 ```
 
 2. mesurer le temps d'exécution et les allocations des fonctions `myqr_simple!()` et `Qprod_simple!()` sur un exemple de taille $500 \times 100$ et les comparer à un appel direct à la factorisation QR de LAPACK ;
 
 ```{julia}
-# ...
+{{< include qr_simple_evaluation.jl >}}
+```
+
+```{julia}
+A = rand(Float64,(500,100))
+x = rand(Float64,500)
+@benchmark myqr_simple!(mat) setup=(mat=deepcopy($A))
+```
+
+```{julia}
+@benchmark LAPACK.geqrf!(mat) setup=(mat=deepcopy($A))
+```
+
+```{julia}
+@benchmark Qprod_simple!($A, $x)
 ```
 
 3. éliminer autant que possible les allocations (il est possible d'obtenir zéro allocations) ;
 
 ```{julia}
-# ...
+function myqr_opti!(A)
+  m, n = size(A)
+  @assert m ≥ n
+  v = similar(A, m)
+
+  for j = 1:n
+    v[j:m] .= @view A[j:m,j]
+    vj = @view v[j:m]
+
+    vj_norm = norm(vj)
+    vj[1] += my_sign(vj[1]) * vj_norm      
+    vj ./= vj[1]
+
+    Aj = @view A[j:m, j:n]
+    Aj .-= (2/dot(vj,vj)) .* (vj .* (vj' * Aj))
+    
+    A[j+1:m,j] .= vj[2:end]
+  end
+  A
+end 
+```
+
+
+```{julia}
+@benchmark myqr_opti!(mat) setup=(mat=deepcopy($A))
 ```
 
 4. implémenter le produit avec $Q^*$ sans allocations et valider qu'il est correct ;
 
+Pour l'implémentation sans allocations, j'ai décomposé algébriquement les opérations à faire et j'ai implémenté le tout avec des views et des opérations *element-wise*. Le principe est le même que pour le produit avec $Q$, mais on parcoure $A$ dans l'autre sens.
 ```{julia}
-# ...
+function Qprod_conjugue!(A, x)
+  m, n = size(A)
+
+  for j = 1:n
+    x1 = x[j]
+    xj = @view x[j+1:m]
+    uj = @view A[j+1:m,j] 
+
+    δj = 1 + dot(uj,uj)
+    βj = dot(uj,xj)
+
+    x[j] -= (2* (x[j] + βj)) / δj
+    xj .-= (2 .* (x1 .* uj .+ βj .* uj)) ./ δj
+  end
+
+  x
+end
+```
+
+```{julia}
+@benchmark Qprod_conjugue!($A, $x)
+```
+
+```{julia}
+{{< include qprod_test.jl >}}
 ```
 
 5. valider que la factorisation et les produits avec $Q$ et $Q^*$ fonctionnent correctement quand $A$ est complexe et quand $A$ contient des entrées de type `BigFloat`.
 
 ```{julia}
-# ...
+B = rand(BigFloat,10,4)
+Q, R = qr(B)
+myqr_simple!(B)
+
+check_Q(B, Q)
+check_QR(B)
+check_Qconj(B, Q)
 ```
+
+```{julia}
+C = rand(ComplexF64,10,4)
+Q, R = qr(C)
+myqr_simple!(C)
+
+check_Q(C, Q)
+check_QR(C)
+check_Qconj(C, Q)
+```
+
+L'erreur sur le cas complexe se produit également pour l'implémentation de base vue en classe. Je ne suis pas parvenue à trouver la source. Quelques hypothèses: la gestion du signe avec la fonction my_sign, la normalisation, le résultat de la fonction dot. Tout devrait fonctionner aussi avec des complexes et je m'explique donc mal d'où peut venir l'erreur, sinon d'une potentielle instabilité numérique liée à la manipulation des complexes. 
