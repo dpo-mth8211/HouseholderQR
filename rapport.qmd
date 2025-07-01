@@ -2,8 +2,8 @@
 title: "Rapport de laboratoire 3"
 subtitle: "MTH8211"
 author:
-  - name: Votre nom
-    email: votre.adresse@polymtl.ca
+  - name: Wadih Chalhoub
+    email: wadih.chalhoub@polymtl.ca
     affiliation:
       - name: Polytechnique Montréal
 format:
@@ -41,28 +41,124 @@ Ce rapport doit contenir des comparaisons entre l'implémentation de base, votre
 
 ```{julia}
 #| output: false
+Pkg.add("BenchmarkTools")
+using BenchmarkTools
+using Test
+include("func.jl")
 ```
 
 2. mesurer le temps d'exécution et les allocations des fonctions `myqr_simple!()` et `Qprod_simple!()` sur un exemple de taille $500 \times 100$ et les comparer à un appel direct à la factorisation QR de LAPACK ;
 
 ```{julia}
-# ...
+m, n = 500, 100
+A = rand(m, n)
+B = rand(m, 50) 
+
+println("Benchmark de myqr_simple!:")
+@btime myqr_simple!($A)
+
+A_copy = copy(A)
+A_qr, τ = myqr_simple!(A_copy)
+println("\nBenchmark de Qprod_simple!:")
+@btime Qprod_simple!($A_qr, $τ, $B)
+
+println("\nBenchmark de LAPACK QR:")
+@btime qr!($A)
 ```
 
 3. éliminer autant que possible les allocations (il est possible d'obtenir zéro allocations) ;
 
 ```{julia}
-# ...
+m, n = 500, 100
+A = rand(m, n)
+B = rand(m, 50) 
+
+println("Benchmark de householder_compact!:")
+@btime householder_compact!($A)
+
+A_copy = copy(A)
+A_qr, τ = householder_compact!(A_copy)
+println("\nBenchmark de apply_Q_compact!:")
+@btime apply_Q_compact!($A_qr, $τ, $B)
+
 ```
 
 4. implémenter le produit avec $Q^*$ sans allocations et valider qu'il est correct ;
 
 ```{julia}
-# ...
+m, n = 500, 100
+A = rand(m, n)
+A_orig = copy(A)
+
+A_compact, τ = householder_compact!(copy(A))
+Q = Matrix{eltype(A)}(I, m, m)
+apply_Q_compact!(A_compact, τ, Q) 
+
+B = rand(m, 50)
+B1 = copy(B)
+B2 = copy(B)
+
+apply_Qt_compact!(A_compact, τ, B1)
+err = norm(B1 - Q' * B2)
+println("Erreur Q*: ", err)
 ```
 
 5. valider que la factorisation et les produits avec $Q$ et $Q^*$ fonctionnent correctement quand $A$ est complexe et quand $A$ contient des entrées de type `BigFloat`.
 
 ```{julia}
-# ...
+m, n = 500, 100
+
+A = rand(ComplexF64, m, n)
+A_orig = copy(A)
+
+B = rand(ComplexF64, m, 50)
+B_orig = copy(B)
+
+A_compact, τ = householder_compact!(copy(A))
+
+Q = Matrix{ComplexF64}(I, m, m)
+apply_Q_compact!(A_compact, τ, Q)
+
+R = triu(A_compact[1:n, 1:n])
+
+B1 = copy(B_orig)
+apply_Q_compact!(A_compact, τ, B1)
+
+B2 = copy(B_orig)
+apply_Qt_compact!(A_compact, τ, B2)
+
+println("‖QR - A‖ = ", norm(Q[:,1:n] * R - A_orig))
+println("‖QᴴQ - I‖ = ", norm(Q' * Q - I, Inf))
+println("‖Q*B - apply_Q‖ = ", norm(Q * B_orig - B1))
+println("‖Qᴴ*B - apply_Qt‖ = ", norm(Q' * B_orig - B2))
+
+#---------------------------------------------------
+
+m, n = 500, 100
+
+A = rand(BigFloat, m, n)
+A_orig = copy(A)
+
+B = rand(BigFloat, m, 50)
+B_orig = copy(B)
+
+A_compact, τ = householder_compact!(copy(A))
+
+Q = Matrix{BigFloat}(I, m, m)
+apply_Q_compact!(A_compact, τ, Q)
+
+R = triu(A_compact[1:n, 1:n])
+
+B1 = copy(B_orig)
+apply_Q_compact!(A_compact, τ, B1)
+
+B2 = copy(B_orig)
+apply_Qt_compact!(A_compact, τ, B2)
+
+println("‖QR - A‖ = ", norm(Q[:,1:n] * R - A_orig))
+println("‖QᵗQ - I‖ = ", norm(Q' * Q - I, Inf))
+println("‖Q*B - apply_Q‖ = ", norm(Q * B_orig - B1))
+println("‖Qᵗ*B - apply_Qt‖ = ", norm(Q' * B_orig - B2))
+
+
 ```
