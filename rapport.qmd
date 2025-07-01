@@ -2,8 +2,8 @@
 title: "Rapport de laboratoire 3"
 subtitle: "MTH8211"
 author:
-  - name: Votre nom
-    email: votre.adresse@polymtl.ca
+  - name: Yasmine Amami
+    email: yasmineamami@polymtl.ca
     affiliation:
       - name: Polytechnique Montréal
 format:
@@ -40,29 +40,171 @@ Ce rapport doit contenir des comparaisons entre l'implémentation de base, votre
 1. Ajouter `BenchmarkTools` à l'environnement de ce laboratoire ;
 
 ```{julia}
-#| output: false
+Pkg.add("BenchmarkTools")
+using BenchmarkTools
+include("qr.jl")
 ```
 
 2. mesurer le temps d'exécution et les allocations des fonctions `myqr_simple!()` et `Qprod_simple!()` sur un exemple de taille $500 \times 100$ et les comparer à un appel direct à la factorisation QR de LAPACK ;
 
 ```{julia}
-# ...
+m, n = 500, 100
+A_ex = randn(m, n)
+x_ex = randn(m)
+
+A1 = copy(A_ex)
+@btime myqr_simple!($A1)
+
+A2 = copy(A_ex)
+@btime qr($A2)  # LAPACK
+
+x1 = copy(x_ex)
+@btime Qprod_simple!($A1, $x1)
+
 ```
 
 3. éliminer autant que possible les allocations (il est possible d'obtenir zéro allocations) ;
 
 ```{julia}
-# ...
+function myqr_opt!(A)
+  m, n = size(A)
+  @assert m ≥ n
+  
+  vj = zeros(eltype(A), m)
+  
+  for j = 1:n
+    for i = j:m
+      vj[i-j+1] = A[i,j]
+    end
+    
+    σj = my_sign(vj[1])
+    vj_norm = norm(view(vj, 1:m-j+1))
+    vj[1] += σj * vj_norm
+    
+    for i = 1:m-j+1
+      vj[i] /= vj[1]
+    end
+    
+    δj = 0.0
+    for i = 1:m-j+1
+      δj += vj[i]^2
+    end
+    
+    for k = j:n
+      vjAk = 0.0
+      for i = 1:m-j+1
+        vjAk += vj[i] * A[i+j-1, k]
+      end
+      
+      vjAk = 2.0 * vjAk / δj
+      
+      for i = 1:m-j+1
+        A[i+j-1, k] -= vj[i] * vjAk
+      end
+    end
+    
+    for i = 2:m-j+1
+      A[j+i-1, j] = vj[i]
+    end
+  end
+  
+  return A
+end
+
+function Qprod_opt!(A, x)
+  m, n = size(A)
+  
+  uj = zeros(eltype(A), m)
+  
+  for j = n:-1:1
+    uj[1] = 1.0
+    for i = 2:m-j+1
+      uj[i] = A[j+i-1, j]
+    end
+    
+    δj = 0.0
+    for i = 1:m-j+1
+      δj += uj[i]^2
+    end
+    
+    ujx = 0.0
+    for i = 1:m-j+1
+      ujx += uj[i] * x[j+i-1]
+    end
+    
+    ujx = 2.0 * ujx / δj
+    
+    for i = 1:m-j+1
+      x[j+i-1] -= uj[i] * ujx
+    end
+  end
+  return x
+end
 ```
 
 4. implémenter le produit avec $Q^*$ sans allocations et valider qu'il est correct ;
 
 ```{julia}
-# ...
+function Qstarprod_opt!(A, x)
+  m, n = size(A)
+  
+  uj = zeros(eltype(A), m)
+  
+  for j = 1:n
+    uj[1] = 1.0
+    for i = 2:m-j+1
+      uj[i] = A[j+i-1, j]
+    end
+    
+    δj = 0.0
+    for i = 1:m-j+1
+      δj += uj[i]^2
+    end
+    
+    ujx = 0.0
+    for i = 1:m-j+1
+      ujx += uj[i] * x[j+i-1]
+    end
+    
+    ujx = 2.0 * ujx / δj
+    
+    for i = 1:m-j+1
+      x[j+i-1] -= uj[i] * ujx
+    end
+  end
+  return x
+end
+
+function check_Q_star(A, Q)
+  m, n = size(A)
+  T = eltype(A)
+  Qstar_julia = hcat([Q' * onehot(T, m, k) for k = 1:m]...)
+  err_Qstar = norm(hcat([Qstarprod_opt!(A, onehot(T, m, k)) for k = 1:m]...) - Qstar_julia)
+  println("erreur sur Q^* : ", err_Qstar)
+end
 ```
 
 5. valider que la factorisation et les produits avec $Q$ et $Q^*$ fonctionnent correctement quand $A$ est complexe et quand $A$ contient des entrées de type `BigFloat`.
 
 ```{julia}
-# ...
+# Cas complexe
+A_c = complex.(randn(5, 3))
+x_c = complex.(randn(5))
+A_c_copy = copy(A_c)
+x_c_copy = copy(x_c)
+
+myqr_opt!(A_c_copy)
+Qprod_opt!(A_c_copy, x_c_copy)
+Qstarprod_opt!(A_c_copy, x_c_copy)
+
+# Cas BigFloat
+A_b = BigFloat.(randn(5, 3))
+x_b = BigFloat.(randn(5))
+A_b_copy = copy(A_b)
+x_b_copy = copy(x_b)
+
+myqr_opt!(A_b_copy)
+Qprod_opt!(A_b_copy, x_b_copy)
+Qstarprod_opt!(A_b_copy, x_b_copy)
 ```
+
