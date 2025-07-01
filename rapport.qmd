@@ -2,8 +2,8 @@
 title: "Rapport de laboratoire 3"
 subtitle: "MTH8211"
 author:
-  - name: Votre nom
-    email: votre.adresse@polymtl.ca
+  - name: Petru Iepureanu
+    email: petru.iepureanu@polymtl.ca
     affiliation:
       - name: Polytechnique Montréal
 format:
@@ -40,13 +40,39 @@ Ce rapport doit contenir des comparaisons entre l'implémentation de base, votre
 1. Ajouter `BenchmarkTools` à l'environnement de ce laboratoire ;
 
 ```{julia}
-#| output: false
+using Pkg
+Pkg.activate("myenv")  
+Pkg.add("BenchmarkTools")
+
+using BenchmarkTools
 ```
 
 2. mesurer le temps d'exécution et les allocations des fonctions `myqr_simple!()` et `Qprod_simple!()` sur un exemple de taille $500 \times 100$ et les comparer à un appel direct à la factorisation QR de LAPACK ;
 
 ```{julia}
-# ...
+using LinearAlgebra
+
+# Configuration
+m, n = 500, 100
+A = rand(m, n)
+A_copy = copy(A)
+x = rand(m)
+x_copy = copy(x)
+
+println("Benchmark de myqr_simple! :")
+@btime myqr_simple!($A_copy)
+A_copy = copy(A)
+
+println("\nBenchmark de qr (LAPACK) :")
+@btime qr($A)
+
+println("\nBenchmark de Qprod_simple! :")
+@btime Qprod_simple!($A, $x_copy)
+x_copy = copy(x) 
+
+println("\nBenchmark de Q * x (LAPACK) :")
+Q, _ = qr(A)
+@btime $Q * $x
 ```
 
 3. éliminer autant que possible les allocations (il est possible d'obtenir zéro allocations) ;
