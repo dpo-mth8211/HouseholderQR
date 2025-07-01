@@ -2,8 +2,8 @@
 title: "Rapport de laboratoire 3"
 subtitle: "MTH8211"
 author:
-  - name: Votre nom
-    email: votre.adresse@polymtl.ca
+  - name: Oussama Mouhtal
+    email: oussama-2.mouhtal@polymtl.ca
     affiliation:
       - name: Polytechnique Montréal
 format:
@@ -40,29 +40,207 @@ Ce rapport doit contenir des comparaisons entre l'implémentation de base, votre
 1. Ajouter `BenchmarkTools` à l'environnement de ce laboratoire ;
 
 ```{julia}
-#| output: false
+Pkg.add("BenchmarkTools")
+using BenchmarkTools
+include("myqr_simple.jl")
 ```
 
 2. mesurer le temps d'exécution et les allocations des fonctions `myqr_simple!()` et `Qprod_simple!()` sur un exemple de taille $500 \times 100$ et les comparer à un appel direct à la factorisation QR de LAPACK ;
 
 ```{julia}
-# ...
+m, n = 500, 100
+A = randn(m,n)
+myqr_simple!(A)
+@benchmark myqr_simple!(A)
+```
+
+```{julia}
+x = randn(m)
+@benchmark Qprod_simple!(A, x)
 ```
 
 3. éliminer autant que possible les allocations (il est possible d'obtenir zéro allocations) ;
 
 ```{julia}
-# ...
+function myqr!(A::Matrix{T})  where {T} 
+
+  m, n = size(A)
+  @assert m ≥ n
+
+  for j = 1:n
+     
+    # Gader le coefficient A[j,j] en mémoire pour l'utiliser ultérieurement
+    ajj = A[j,j]      
+    σj = my_sign(ajj)
+
+    # calcul de la norme du veceur A[j:m,j] ##
+    vj_norm = convert(T, 0.0)                              
+    for i = j:m                          
+      vj_norm += A[i,j]*conj(A[i,j])                    
+    end 
+    vj_norm = sqrt(vj_norm)
+
+    # Création du vecteur de Housholder
+    uj = ajj + σj * vj_norm
+
+    # Mise à l'échelle pour pouvoir stocker Q et R dans A
+    for i=j+1:m 
+      A[i,j] /= uj
+    end
+    A[j,j] = convert(T, 1.0)  
+
+    # Calcul de la norme du veceur A[j:m,j] pour normalisation
+    δj = convert(T, 1.0)
+    for i = j+1:m
+      δj += A[i,j]*conj(A[i,j])  
+    end
+    
+    # Appliquer la matrice de Householder aux colonnes de j+1 à n
+    for k =j+1:n
+      # projection de A[j:m,k] sur A[j:m,j]
+      proj = A[j,k]
+      for i=j+1:m
+        proj += conj(A[i,j]) * A[i,k]
+      end
+
+      # Mise à jour des vecteurs
+      A[j,k] -= convert(T, 2.0)*proj/ δj
+      for i=j+1:m
+        A[i,k] -= (convert(T, 2.0)*proj/ δj)* A[i,j] 
+      end 
+    end
+
+    # Appliquer la matrice de Householder à la j ème colonne
+    proj = ajj
+    for i=j+1:m
+      proj += (A[i,j]*conj(A[i,j]))*uj
+    end
+    A[j,j] = -σj*vj_norm
+  end
+  A
+end 
+
+m, n = 500, 100
+A = randn(m,n)
+
+@benchmark myqr!(A)
 ```
+
+Remarque : J'ai changé la fonction `my_sign` pour qu'elle soit adapter au cas complexe.
+
+# Comparaison avec QR de LAPACK
+
+```{julia}
+
+function check_MYQR(A::Matrix{T}) where {T}
+  m, n = size(A)
+  Q, R = qr(A)
+  B = copy(A)
+  myqr!(B)
+  check_Q(B, Q)
+  err_R = norm(UpperTriangular(B[1:n, 1:n] - R)) / norm(UpperTriangular(R))
+  println("erreur sur R : ", err_R)
+end
+
+A = randn(m,n)
+check_MYQR(A)
+```
+
 
 4. implémenter le produit avec $Q^*$ sans allocations et valider qu'il est correct ;
 
 ```{julia}
-# ...
+function Qastprod!(A::Matrix{T}, x::Vector{T}) where {T}
+  m, n = size(A)
+  for j = 1:n
+    δj  = convert(T, 1.)
+    proj = x[j]
+    for i = j+1:m
+      δj += A[i, j]*conj(A[i, j])
+      proj += conj(A[i, j])*x[i] 
+    end
+    
+    x[j] -= (convert(T, 2.0) *proj)/δj
+    for i = j+1:m
+      x[i] -= convert(T, 2.0)*proj*A[i, j]/δj
+    end
+  end
+  x
+end
+
+x = randn(m)
+A = randn(m,n)
+myqr!(A)
+
+@benchmark Qastprod!(A, x)
 ```
 
-5. valider que la factorisation et les produits avec $Q$ et $Q^*$ fonctionnent correctement quand $A$ est complexe et quand $A$ contient des entrées de type `BigFloat`.
+# Test du produit $Q^* x$
 
 ```{julia}
-# ...
+function check_Qastprod(A::Matrix{T}, x::Vector{T}) where {T}
+  m, n = size(A)
+  m, n = size(A)
+  Q, R = qr(A)
+  myqr!(A)
+  y = copy(x)
+  err_Q_ast_x = norm(Qastprod!(A, y) - Q' * x) / norm(x)
+
+  println("erreur sur Q^* x : ", err_Q_ast_x)
+end
+
+
+x = randn(m)
+A = randn(m,n)
+check_Qastprod(A, x)
+```
+5. valider que la factorisation et les produits avec $Q$ et $Q^*$ fonctionnent correctement quand $A$ est complexe et quand $A$ contient des entrées de type `BigFloat`.
+
+
+# Validation de la factorisation QR dans le cas `BigFloat`
+
+```{julia}
+T = BigFloat
+
+A = randn(T,m,n)
+check_MYQR(A)
+```
+
+# Validation de la factorisation QR dans le cas `ComplexF64`
+
+```{julia}
+T = ComplexF64
+
+A = randn(T,m,n) 
+check_MYQR(A)
+```
+
+# Validation du produit avec $Q$ et  $Q^*$ dans le cas `BigFloat`
+
+```{julia}
+
+T = BigFloat
+
+A = randn(T,m,n)
+myqr!(A)
+
+x = randn(T,m)
+check_Qastprod(A, x)
+check_Qprod_simple(A, x) # pour vérifier Q x (coder dans myqr_simple.jl)
+
+```
+
+# Validation du produit avec $Q$ et  $Q^*$ dans le cas `ComplexF64`
+
+```{julia}
+
+T = ComplexF64
+
+A = randn(T,m,n)
+myqr!(A)
+
+x = randn(T,m)
+check_Qastprod(A, x)
+check_Qprod_simple(A, x)
+
 ```
