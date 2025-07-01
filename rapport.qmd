@@ -2,8 +2,8 @@
 title: "Rapport de laboratoire 3"
 subtitle: "MTH8211"
 author:
-  - name: Votre nom
-    email: votre.adresse@polymtl.ca
+  - name: Ulrich Baron-Fournier
+    email: ulrich.baron-fournier@polymtl.ca
     affiliation:
       - name: Polytechnique Montréal
 format:
@@ -40,29 +40,185 @@ Ce rapport doit contenir des comparaisons entre l'implémentation de base, votre
 1. Ajouter `BenchmarkTools` à l'environnement de ce laboratoire ;
 
 ```{julia}
-#| output: false
+using Pkg
+Pkg.add("BenchmarkTools")  # À lancer UNE SEULE FOIS pour installer le package
+using BenchmarkTools
+```
+
+## Ajout des fonctions du carnet jupyter
+
+```{julia}
+# Définition des fonctions provenant du carnet jupyter
+function my_sign(x::Number)
+    if x == zero(x)
+      return one(x)
+    else
+      return sign(x)
+    end
+end
+
+"""
+    myqr_simple(A)
+
+Écrase `A` par le résultat de la factorisation QR compacte de Householder.
+"""
+function myqr_simple!(A)
+  m, n = size(A)
+  @assert m ≥ n
+  for j = 1:n
+    vj = A[j:m,j]
+    σj = my_sign(vj[1])
+    vj_norm = norm(vj)
+    vj[1] += σj * vj_norm
+    vj ./= vj[1]
+    δj = vj'vj
+
+    A[j:m,j:n] -= 2 * vj * (vj' * A[j:m,j:n]) / δj
+    A[j+1:m,j] = vj[2:end]
+  end
+  A
+end
+
+"""
+    Qprod_simple!(A, x)
+
+Écrase `x` par le résultat du produit Q * x, où Q est le facteur unitaire de la factorisation QR compacte de Householder.
+On suppose que `A` contient déjà le résultat de cette factorisation QR compacte.
+"""
+function Qprod_simple!(A, x)
+  m, n = size(A)
+  for j = n:-1:1
+    uj = [1 ; A[j+1:m, j]]
+    δj = uj'uj
+    x[j:m] -= 2*uj*(uj'x[j:m])/δj
+  end
+  x
+end
+
+"""
+    onehot(T, m, k)
+
+Construit un vecteur de taille `m` d'éléments de type `T` composé de zéros et d'un 1 à l'indice `k`.
+Si `T` est omis, le type Float64 est utilisé.
+"""
+function onehot(T, m, k)
+  @assert 1 ≤ k ≤ m
+  x = zeros(T, m)
+  x[k] = 1
+  x
+end
+
+function check_QR(A)
+  m, n = size(A)
+  Q, R = qr(A)
+  B = copy(A)
+  myqr_simple!(B)
+  check_Q(B, Q)
+  err_R = norm(UpperTriangular(B[1:n, 1:n] - R)) / norm(UpperTriangular(R))
+  println("erreur sur R : ", err_R)
+end
+
+function check_Q(A, Q)
+  m, n = size(A)
+  T = eltype(A)
+  Qjulia = hcat([Q * onehot(T, m, k) for k = 1:m]...)
+  err_Q = norm(hcat([Qprod_simple!(A, onehot(T, m, k)) for k = 1:m]...) - Qjulia)
+  println("erreur sur Q : ", err_Q)
+end
+
 ```
 
 2. mesurer le temps d'exécution et les allocations des fonctions `myqr_simple!()` et `Qprod_simple!()` sur un exemple de taille $500 \times 100$ et les comparer à un appel direct à la factorisation QR de LAPACK ;
 
 ```{julia}
-# ...
+# Création de la matrice test
+A = randn(500, 100)
+x = randn(500)
+
+# Benchmark myqr_simple!
+@btime myqr_simple!(A);
+myqr_simple!(A)
+@btime Qprod_simple!(A, x);
+
+# Benchmark LAPACK
+@btime qr(A);
+Q,R = qr(A)
+@btime Q*x;
 ```
 
 3. éliminer autant que possible les allocations (il est possible d'obtenir zéro allocations) ;
 
 ```{julia}
-# ...
+function myqr_simple_opti!(A)
+    m, n = size(A)
+    @assert m ≥ n
+
+    for j = 1:n
+        vj = view(A, j:m, j)
+        σj = sign(vj[1])
+        vj_norm = norm(vj)
+        vj[1] += σj * vj_norm
+        vj ./= vj[1]
+        δj = dot(vj, vj)
+
+        for i in j+1:n
+            a = 0
+            for k in j:m
+                a += vj[k - j + 1] * A[k, i]
+            end
+            for ii in j:m
+                A[ii, i] -= 2 * vj[ii - j + 1] * a / δj
+            end
+        end
+        A[j, j] = -σj * vj_norm
+    end
+    A
+end
+
+
+A_test = randn(500, 100)
+@btime myqr_simple_opti!(A_test)
 ```
+On peut voir que la fonction myqr_simple_opti! a maintenant 0 allocation! Cela a été obtenu en utilisant des view à la place de créer de nouvelles variables, en utilisant le produit scalaire dot à la place de faire le produit directement du conjugué du vecteur et du vecteur et en utilisant des boucles for pour calculer élément par élément les valeurs dans la factorisation compacte.
 
 4. implémenter le produit avec $Q^*$ sans allocations et valider qu'il est correct ;
 
 ```{julia}
-# ...
-```
+function Qprod_simple_opti!(A, x)
+    m, n = size(A)
+    for j = 1:n
+        x1 = x[j]
+        xj = @view x[j+1:m]
+        uj = @view A[j+1:m, j]
+        norm = 1 + dot(uj, uj)          
+        prod = dot(uj, xj)           
+        coeff = 2 * (x1 + prod) / norm
+        x[j] -= coeff
+        xj .-= coeff .* uj
+    end
+    x
+end
 
+@btime Qprod_simple_opti!(A,x)
+
+```
+On voit que la fonction Qprod_simple_opti! a 0 allocation. Premièrement, on utilise des view afin de ne pas créer de nouvelles variables. Ensuite, on utilise la fonction dot. Finalement on effectue les opération élément par élément avec .* et .= .
 5. valider que la factorisation et les produits avec $Q$ et $Q^*$ fonctionnent correctement quand $A$ est complexe et quand $A$ contient des entrées de type `BigFloat`.
 
 ```{julia}
-# ...
+A = randn(ComplexF64, 500 , 100)
+x = randn(ComplexF64, 500)
+Q, R = qr(A)
+myqr_simple_opti!(A)
+check_Q(A,Q)
+check_QR(A)
+
+A_big = rand(BigFloat, 500, 100)
+x_big = rand(BigFloat, 500)
+Q, R = qr(A_big)
+myqr_simple_opti!(A_big)
+check_Q(A_big,Q)
+check_QR(A_big)
 ```
+
+On voit que pour le cas complexe, cela ne fonctionne pas. Cela n'est pas étonnant, car les fonctions ne prennent pas en compte le conjugué d'un nombre complexe (le cas complexe tout simplement). Pour ce qui est des BigFloat, on peut voir que les fonctions permettent d'obtenir des résultats valides!
