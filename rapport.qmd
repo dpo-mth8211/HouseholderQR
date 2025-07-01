@@ -2,8 +2,8 @@
 title: "Rapport de laboratoire 3"
 subtitle: "MTH8211"
 author:
-  - name: Votre nom
-    email: votre.adresse@polymtl.ca
+  - name: Téo Dumoutier
+    email: teo.dumoutier@polymtl.ca
     affiliation:
       - name: Polytechnique Montréal
 format:
@@ -14,6 +14,8 @@ format:
       - text: |
             \usepackage{xspace}
             \usepackage[francais]{babel}
+            \usepackage{fvextra}
+            \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,commandchars=\\\{\}}
     geometry:
       - margin=1in
     papersize: letter
@@ -37,32 +39,445 @@ Ce rapport doit contenir des comparaisons entre l'implémentation de base, votre
 
 ## Exercices
 
-1. Ajouter `BenchmarkTools` à l'environnement de ce laboratoire ;
+### 1. Ajouter `BenchmarkTools` à l'environnement de ce laboratoire ;
 
 ```{julia}
 #| output: false
+Pkg.add("BenchmarkTools")
+using BenchmarkTools
 ```
 
-2. mesurer le temps d'exécution et les allocations des fonctions `myqr_simple!()` et `Qprod_simple!()` sur un exemple de taille $500 \times 100$ et les comparer à un appel direct à la factorisation QR de LAPACK ;
+### 2. Mesurer le temps d'exécution et les allocations des fonctions `myqr_simple!()` et `Qprod_simple!()` sur un exemple de taille $500 \times 100$ et les comparer à un appel direct à la factorisation QR de LAPACK ;
 
 ```{julia}
-# ...
+#| output: false
+function my_sign(x::Number)
+"""
+Retourne le signe d'un nombre
+"""
+  if x == zero(x)
+    return one(x)
+  else
+    return sign(x)
+  end
+end
+
+function onehot(T, m, k)
+"""
+Construit un vecteur de taille `m` d'éléments de type `T` composé de zéros et d'un 1 à l'indice `k`.
+Si `T` est omis, le type Float64 est utilisé.
+"""
+  @assert 1 ≤ k ≤ m
+  x = zeros(T, m)
+  x[k] = 1
+  x
+end
+
+onehot(m, k) = onehot(Float64, m, k)
+
+function myqr_simple!(A)
+"""
+Écrase `A` par le résultat de la factorisation QR compacte de Householder.
+"""
+  m, n = size(A)
+  @assert m ≥ n
+  for j = 1:n
+    vj = A[j:m,j]
+    sigma_j = my_sign(vj[1])
+    vj_norm = norm(vj)
+    vj[1] += sigma_j * vj_norm
+    vj ./= vj[1]
+    delta_j = vj'vj
+
+    A[j:m,j:n] -= 2 * vj * (vj' * A[j:m,j:n]) / delta_j
+    A[j+1:m,j] = vj[2:end]
+  end
+  A
+end 
+
+function Qprod_simple!(A, x)
+"""
+Écrase `x` par le résultat du produit Q * x, où Q est le facteur unitaire de la factorisation QR compacte de Householder.
+On suppose que `A` contient déjà le résultat de cette factorisation QR compacte.
+"""
+  m, n = size(A)
+  for j = n:-1:1
+    uj = [1 ; A[j+1:m, j]]
+    delta_j = uj'uj
+    x[j:m] -= 2*uj*(uj'x[j:m])/delta_j
+  end
+  x
+end
 ```
 
-3. éliminer autant que possible les allocations (il est possible d'obtenir zéro allocations) ;
+On remarque qu'il y a beaucoup plus d'allocations dans le cadre des fonctions `myqr_simple` et `Qprod_simple` que dans le cadre de la factorisation QR de LAPACK et du produit avec le Q trouvé ainsi. Le temps d'exécution est lui aussi bien plus élevé dans le cadre de cesdites fonctions personalisées. L'exemple suivant montre cela :
 
 ```{julia}
-# ...
+m, n = 500, 100
+A = rand(m, n)
+x = rand(m)
+Q, R = qr(A)
+
+bench_myqr = @benchmark myqr_simple!(A)
+bench_Qprod = @benchmark Qprod_simple!(A, x)
+bench_qr = @benchmark qr(A)
+bench_Qx = @benchmark Q * x
+
+println("Performance de myqr_simple!:")
+println(" - Allocations : ", mean(bench_myqr).allocs)
+println(" - Temps d'exécution : ", mean(bench_myqr).time)
+
+println("Performance de Qprod_simple!:")
+println(" - Allocations : ", mean(bench_Qprod).allocs)
+println(" - Temps d'exécution : ", mean(bench_Qprod).time)
+
+println("Performance de qr(A):")
+println(" - Allocations : ", mean(bench_qr).allocs)
+println(" - Temps d'exécution : ", mean(bench_qr).time)
+
+println("Performance de Q*x:")
+println(" - Allocations : ", mean(bench_Qx).allocs)
+println(" - Temps d'exécution : ", mean(bench_Qx).time)
 ```
 
-4. implémenter le produit avec $Q^*$ sans allocations et valider qu'il est correct ;
+### 3. Éliminer autant que possible les allocations (il est possible d'obtenir zéro allocations) ;
+
+Afin d'éliminer les allocations et d'améliorer la performance, plusieurs stratégies sont utilisées :  
+- Utiliser des `view` plutôt que des assignations directes pour éviter la création de copies  
+- Recourir à la fonction `dot` plutôt que de faire le produit $v_j' v_j$, qui crée temporairement un vecteur $v_j'$ en allouant de la mémoire  
+- Faire des boucles `for` pour assigner les valeurs des produits matrices/vecteurs éléments par éléments  
+- Éviter de traiter dans les boucles `for` la colonne $j$ qui est mise à 0 pour tous les éléments en dessous de la diagonale, car de toute façon ces éléments sont écrasés pour y placer le vecteur $u_j$, et il est connu que l'élément sur la diagonale prend la valeur de $-\sigma_j * ||v_j||$  
+
+Afin d'avoir un formalisme compatible avec les nombres complexes, plusieurs modifications sont apportées :  
+- Utiliser un signe $\sigma_j$ complexe qui représente une direction normalisée dans le plan complexe (généralisation du signe réel)  
+- Utiliser $H = \pm \sigma_j'(I - 2*(uu')/(u'u))$, autrement dit ajouter le conjugué de cedit signe complexe comme coefficient de H à un coefficient $\pm 1$ près, ce qui permet de faire fonctionner la réflexion de Householder comme prévu (<https://arxiv.org/pdf/math-ph/0609050> p.19)  
+- Choisir cedit coefficient $\pm 1$ selon un critère se basant sur le signe de la composante réelle de $\sigma_j$ (est positif si cette composante est positive), ce qui permet par ailleurs de garder le formalisme compatible avec des $\sigma_j$ réels, car le facteur $sign(Re(\sigma_j)) * \sigma_j'$ est égal à 1 et disparaît donc dans ce cas-ci  
+- Stocker en même temps la valeur de $\sigma_j$ complexe et de $r_{jj}$ sur la diagonale de $A$, de sorte à pouvoir retrouver $\sigma_j$ afin d'effectuer des produits avec $Q$ et $Q'$, mais aussi à pouvoir retrouver les vraies valeurs de la diagonale de R avec $r_{jj} = -sign(Re(\sigma_j))*||v_j||$  
+- Conjuguer le coefficient complexe $\sigma_j$ de $H$ lors de l'application des produits avec $Q$ et $Q'$ de façon appropriée. Les $H$ établis lors de la factorisation QR correspondent à $Q'$, ce qui signifie que dans le cas du produit avec $Q'$ les coefficients complexes de chaque $H$ sont les mêmes que ceux utilisés lors de la factorisation et l'ordre d'application est le même, alors que dans le cas du produit avec $Q$ ceux-ci doivent être conjugués et l'ordre d'application est inversé. On note que dans un cas réel, les $H$ sont hermitiens et le conjugué ne change rien.  
 
 ```{julia}
-# ...
+#| output: false
+function myqr_optimized!(A)
+"""
+Écrase `A` par le résultat de la factorisation QR compacte de Householder (formalisme général et sans allocation).
+"""
+  m, n = size(A)
+  @assert m ≥ n
+  for j = 1:n
+    vj = view(A, j:m, j)
+    sigma_j = my_sign(vj[1])
+    vj_norm = norm(vj)
+    vj[1] += sigma_j * vj_norm
+    vj ./= vj[1]
+    delta_j = dot(vj, vj)
+
+    sigma_j_sign_real = my_sign(real(sigma_j))
+    sigma_j_conj = conj(sigma_j)
+
+    for i_2 in j+1:n
+      a = 0
+      for k in j:m
+        a += conj(vj[k - j + 1]) * A[k, i_2]
+      end 
+      for i_1 in j:m
+        A[i_1, i_2] *= sigma_j_sign_real*sigma_j_conj
+        A[i_1, i_2] -= 2 * sigma_j_sign_real*sigma_j_conj * vj[i_1 - j + 1] * a / delta_j
+      end
+    end
+
+    A[j, j] = -sigma_j * vj_norm
+  end
+  A
+end 
+
+function Qprod_optimized!(A, x)
+"""
+Écrase `x` par le résultat du produit Q * x, où Q est le facteur unitaire de la factorisation QR compacte de Householder.
+On suppose que `A` contient déjà le résultat de cette factorisation QR compacte (formalisme général et sans allocation).
+"""
+  m, n = size(A)
+  for j = n:-1:1
+    ajj = A[j, j]
+    uj = view(A, j:m, j)
+    uj[1] = 1
+    delta_j = dot(uj, uj)
+
+    sigma_j = -my_sign(ajj)
+    sigma_j_sign_real = my_sign(real(sigma_j))
+
+    a = 0
+    for k in j:m
+      a += conj(uj[k - j + 1]) * x[k]
+    end 
+    for i_1 in j:m
+      x[i_1] *= sigma_j_sign_real*sigma_j
+      x[i_1] -= 2 * sigma_j_sign_real*sigma_j * uj[i_1 - j + 1] * a / delta_j
+    end
+
+    A[j, j] = ajj
+  end
+  x
+end
 ```
 
-5. valider que la factorisation et les produits avec $Q$ et $Q^*$ fonctionnent correctement quand $A$ est complexe et quand $A$ contient des entrées de type `BigFloat`.
+On remarque qu'en altérant les fonctions afin d'obtenir `myqr_optimized` et `Qprod_optimized`, il est possible d'éliminer entièrement les allocations. Le temps d'exécution est aussi drastiquement réduit, en particulier pour la factorisation QR de Householder, bien que toujours un peu plus élevé que celui de la factorisation QR de LAPACK et du produit avec le Q trouvé ainsi. L'exemple suivant montre cela :
 
 ```{julia}
-# ...
+m, n = 500, 100
+A = rand(m, n)
+x = rand(m)
+
+bench_myqr = @benchmark myqr_optimized!(A)
+bench_Qprod = @benchmark Qprod_optimized!(A, x)
+bench_qr = @benchmark qr(A)
+bench_Qx = @benchmark Q * x
+
+println("Performance de myqr_optimized!:")
+println(" - Allocations : ", mean(bench_myqr).allocs)
+println(" - Temps d'exécution : ", mean(bench_myqr).time)
+
+println("Performance de Qprod_optimized!:")
+println(" - Allocations : ", mean(bench_Qprod).allocs)
+println(" - Temps d'exécution : ", mean(bench_Qprod).time)
+
+println("Performance de qr(A):")
+println(" - Allocations : ", mean(bench_qr).allocs)
+println(" - Temps d'exécution : ", mean(bench_qr).time)
+
+println("Performance de Q*x:")
+println(" - Allocations : ", mean(bench_Qx).allocs)
+println(" - Temps d'exécution : ", mean(bench_Qx).time)
+```
+
+### 4. Implémenter le produit avec $Q^*$ sans allocations et valider qu'il est correct ;
+
+Comment mentionné précédemment, l'implémentation du produit avec $Q'$ ne nécessite que de conjuguer et d'inverser l'ordre d'application des réflexions de Householder, qui définissent $Q$ et $Q'$ entièrement. Pour $Q'$, elles sont appliquées de 1 à $n$, alors que pour $Q$ elles étaient appliquées de $n$ à 1.
+
+```{julia}
+#| output: false
+function Qprod_conj_optimized!(A, x)
+"""
+Écrase `x` par le résultat du produit Q * x, où Q est le facteur unitaire de la factorisation QR compacte de Householder.
+On suppose que `A` contient déjà le résultat de cette factorisation QR compacte (formalisme général et sans allocation).
+"""
+  m, n = size(A)
+  for j = 1:n
+    ajj = A[j, j]
+    uj = view(A, j:m, j)
+    uj[1] = 1
+    delta_j = dot(uj, uj)
+
+    sigma_j = -my_sign(ajj)
+    sigma_j_sign_real = my_sign(real(sigma_j))
+    sigma_j_conj = conj(sigma_j)
+
+    a = 0
+    for k in j:m
+      a += conj(uj[k - j + 1]) * x[k]
+    end 
+    for i_1 in j:m
+      x[i_1] *= sigma_j_sign_real*sigma_j_conj
+      x[i_1] -= 2 * sigma_j_sign_real*sigma_j_conj * uj[i_1 - j + 1] * a / delta_j
+    end
+
+    A[j, j] = ajj
+  end
+  x
+end
+```
+
+L'exemple suivant montre que `Qprod_conj_optimized` n'effectue aucune allocation :
+
+```{julia}
+m, n = 500, 100
+A = rand(m, n)
+x = rand(m)
+
+myqr_optimized!(A)
+bench_Qprod_conj = @benchmark Qprod_optimized!(A, x)
+
+println("Performance de Qprod_conj_optimized!:")
+println(" - Allocations : ", mean(bench_Qprod_conj).allocs)
+println(" - Temps d'exécution : ", mean(bench_Qprod_conj).time)
+```
+
+L'exemple suivant montre que `Qprod_conj_optimized` est valide en comparant le produit obtenu avec celui découlant de la factoriation QR de LAPACK. On note que pour comparer la validité de $Q$ et des produits $Q*x$ et $Q'*x$, il est nécessaire de prendre des exemples où $A$ est carrée, car autrement les colonnes de Q situées au-delà de $n$ dans la factorisation QR de LAPACK sont laisées libres et sont ainsi arbitraires tant qu'elles sont orthogonales aux $n$ premières colonnes et tant qu'elles sont orthogonales entre elles. Ceci fait différer les résultats, car par opposition les colonnes au-delà de $n$ dans la factorisation QR de Householder sont déterminées par les réflexions de Householder qui sont appliquées successivement. Ces colonnes sont donc inévitablement inégales entre les deux méthodes pour des cas où $m \ge n$. Ceci n'est pas un problème si $A$ est carrée, et cela permet de comparer les résultats convenablement. Finalement, on note que Q est valide à une colonne conjuguée près, ce qui affecte le résultat de $Q'*x$, on s'assure donc de faire correspondre les signes des colonnes des $Q$ avant d'effectuer la comparaison. 
+
+```{julia}
+m, n = 100, 100
+A = rand(m, n)
+x = rand(m)
+
+T = eltype(A)
+Q, R = qr(A)
+
+B = copy(A)
+z = copy(x)
+myqr_optimized!(B)
+
+R_found = zeros(T, n, n)
+for i_2 in 1:n
+  for i_1 in 1:i_2
+    if i_1 != i_2
+      R_found[i_1, i_2] = B[i_1, i_2]
+    else
+      rjj = B[i_2, i_2]
+      R_found[i_1, i_2] = my_sign(real(rjj))*norm(rjj)
+    end
+  end
+end
+
+Qjulia = hcat([Q * onehot(T, m, k) for k = 1:m]...)
+for i_2 in 1:n
+  if my_sign(real(R[i_2, i_2])) != my_sign(real(R_found[i_2, i_2]))
+    Qjulia[:, i_2] *= -1
+  end
+end
+
+Qprod_conj_optimized!(B, z)
+
+println("Erreur sur Q'*x (%)")
+println(norm(Qjulia'x - z)/norm(Qjulia'*x))
+```
+
+### 5. Valider que la factorisation et les produits avec $Q$ et $Q^*$ fonctionnent correctement quand $A$ est complexe et quand $A$ contient des entrées de type `BigFloat`.
+
+Afin de valider les méthodes présentées précédemment dans un cas général avec des nombres complexes et/ou des BigFloat, la fonction `check_QR_optimized` compare $Q$, $R$, et les produits $Q*x$ et $Q'*x$ en considérant que Q et R sont valides à une colonne conjuguée près pour $Q$ et à une ligne conjuguée près pour $R$. Les comparaisons sont faites avec la factorisation QR de LAPACK et les opérations en découlant. De plus, les types des résultats sont affichés afin de montrer que dans le cas d'entrées en BigFloat, les résultats sont également en BigFloat.
+
+```{julia}
+#| output: false
+function check_QR_optimized(A, x)
+  m, n = size(A)
+  T = eltype(A)
+  Q, R = qr(A)
+
+  B = copy(A)
+  y = copy(x)
+  z = copy(x)
+  myqr_optimized!(B)
+
+  R_found = zeros(T, n, n)
+  for i_2 in 1:n
+    for i_1 in 1:i_2
+      if i_1 != i_2
+        R_found[i_1, i_2] = B[i_1, i_2]
+      else
+        rjj = B[i_2, i_2]
+        R_found[i_1, i_2] = my_sign(real(rjj))*norm(rjj)
+      end
+    end
+  end
+
+  R_optimized = copy(R_found)
+  for i_1 in 1:n
+    if my_sign(real(R[i_1, i_1])) != my_sign(real(R_found[i_1, i_1]))
+      R_optimized[i_1, :] *= -1
+    end
+  end
+
+  Qjulia = hcat([Q * onehot(T, m, k) for k = 1:m]...)
+
+  Q_optimized = hcat([Qprod_optimized!(B, onehot(T, m, k)) for k = 1:m]...)
+  for i_2 in 1:n
+    if my_sign(real(R[i_2, i_2])) != my_sign(real(R_found[i_2, i_2]))
+      Qjulia[:, i_2] *= -1
+    end
+  end
+
+  err_Q = norm(Q_optimized - Qjulia) / norm(Qjulia)
+  println("Erreur sur Q (%) : ")
+  println(err_Q)
+
+  err_R = norm(R_optimized - R) / norm(UpperTriangular(R))
+  println("Erreur sur R (%) : ")
+  println(err_R)
+
+  Qprod_optimized!(B, y)
+  err_Q_x = norm(y - Qjulia*x) / norm(Qjulia*x)
+  println("Erreur sur Q*x (%) : ")
+  println(err_Q_x)
+
+  Qprod_conj_optimized!(B, z)
+  err_Q_conj_x = norm(z - Qjulia'*x) / norm(Qjulia'*x)
+  println("Erreur sur Q'*x (%) : ")
+  println(err_Q_conj_x)
+
+  println("Type de Q : ", eltype(Q_optimized))
+  println("Type de R : ", eltype(R_optimized))
+  println("Type de Q*x : ", eltype(y))
+  println("Type de Q'*x : ", eltype(z))
+end
+```
+
+L'exemple suivant permet de visualiser la validité de tous les résutlats dans un cas simple :
+
+```{julia}
+m, n = 3, 3
+A = rand(ComplexF64, m, n) + im * rand(ComplexF64, m, n)
+x = rand(ComplexF64, m) + im * rand(ComplexF64, m)
+
+T = eltype(A)
+Q, R = qr(A)
+
+B = copy(A)
+y = copy(x)
+z = copy(x)
+myqr_optimized!(B)
+
+R_found = zeros(T, n, n)
+for i_2 in 1:n
+  for i_1 in 1:i_2
+    if i_1 != i_2
+      R_found[i_1, i_2] = B[i_1, i_2]
+    else
+      rjj = B[i_2, i_2]
+      R_found[i_1, i_2] = my_sign(real(rjj))*norm(rjj)
+    end
+  end
+end
+
+R_optimized = copy(R_found)
+for i_1 in 1:n
+  if my_sign(real(R[i_1, i_1])) != my_sign(real(R_found[i_1, i_1]))
+    R_optimized[i_1, :] *= -1
+  end
+end
+
+Qjulia = hcat([Q * onehot(T, m, k) for k = 1:m]...)
+
+Q_optimized = hcat([Qprod_optimized!(B, onehot(T, m, k)) for k = 1:m]...)
+for i_2 in 1:n
+  if my_sign(real(R[i_2, i_2])) != my_sign(real(R_found[i_2, i_2]))
+    Qjulia[:, i_2] *= -1
+  end
+end
+
+Qprod_optimized!(B, y)
+Qprod_conj_optimized!(B, z)
+
+display("Matrice Q")
+display(Qjulia)
+display(Q_optimized)
+
+display("Matrice R")
+display(R)
+display(R_optimized)
+
+display("Produit avec Q")
+display(Qjulia*x)
+display(y)
+
+display("Produit avec Q'")
+display(Qjulia'*x)
+display(z)
+```
+
+L'exemple suivant montre la validité des méthodes présentées précédemment dans un cas général :
+
+```{julia}
+m, n = 100, 100
+A = rand(BigFloat, m, n) + im * rand(BigFloat, m, n)
+x = rand(BigFloat, m) + im * rand(BigFloat, m)
+
+check_QR_optimized(A, x)
 ```
